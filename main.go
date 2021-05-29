@@ -20,6 +20,8 @@ type SnapprocessInfo struct {
 	ProcessList []ProcessData
 }
 
+var MAP_KEYS = make(map[int]bool)
+
 //process info
 type ProcessData struct {
 	ProcessName   string
@@ -60,13 +62,20 @@ func respondError(w http.ResponseWriter, code int, message string) {
 }
 
 //Add process to  a list recursively
-func AddProcessDetails(proc *process.Process, processList *[]ProcessData, level int) {
+func AddProcessDetails(proc *process.Process, level int) ProcessData {
 	pid := proc.Pid
 	name, _ := proc.Name()
 	ppid, _ := proc.Ppid()
 	memory, _ := proc.MemoryPercent()
 	cpu, _ := proc.CPUPercent()
 	ChildProcess, _ := proc.Children()
+	var childData []ProcessData
+	if len(ChildProcess) > 0 {
+		for i, _ := range ChildProcess {
+			childData = append(childData, AddProcessDetails(ChildProcess[i], level+1))
+
+		}
+	}
 	processDetails := ProcessData{
 		ProcessName:   name,
 		Pid:           int(pid),
@@ -74,29 +83,12 @@ func AddProcessDetails(proc *process.Process, processList *[]ProcessData, level 
 		order:         level,
 		MemoryPercent: memory,
 		CpuPercent:    cpu,
+		ChildProcess:  childData,
 	}
-	*processList = append(*processList, processDetails)
-
-	if len(ChildProcess) > 0 {
-		for i, _ := range ChildProcess {
-			AddProcessDetails(ChildProcess[i], processList, level+1)
-
-		}
+	if processDetails.order != 0 {
+		MAP_KEYS[int(pid)] = true
 	}
-
-}
-
-//delete repeated process in the list
-func unique(intSlice []ProcessData) []ProcessData {
-	keys := make(map[int]bool)
-	list := []ProcessData{}
-	for _, entry := range intSlice {
-		if _, value := keys[entry.Pid]; !value {
-			keys[entry.Pid] = true
-			list = append(list, entry)
-		}
-	}
-	return list
+	return processDetails
 }
 
 //handler to get process details in list
@@ -107,41 +99,25 @@ func ProcessDetails(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("error while getting process info", err)
 	}
 	var processList []ProcessData
-	for i, _ := range processes {
+	for i, proc := range processes {
 
-		AddProcessDetails(processes[i], &processList, 0)
+		if proc.Pid > 100 && proc.Pid < 1000 {
+			if !MAP_KEYS[int(proc.Pid)] {
+				processList = append(processList, AddProcessDetails(processes[i], 0))
 
-	}
-
-	sort.SliceStable(processList, func(i, j int) bool {
-		return processList[i].order > processList[j].order
-	})
-
-	data := unique(processList)
-
-	var finalList []ProcessData
-
-	ChildProcessIds := make(map[int]bool)
-	for i := 0; i <= len(data)-1; i++ {
-		for j := i + 1; j <= len(data)-1; j++ {
-			if data[i].Ppid == data[j].Pid {
-				ChildProcessIds[data[i].Pid] = true
-				data[j].ChildProcess = append(data[j].ChildProcess, data[i])
 			}
 		}
 	}
 
-	for i, _ := range data {
-		if !ChildProcessIds[data[i].Pid] {
-			finalList = append(finalList, data[i])
-		}
-	}
-	sort.SliceStable(finalList, func(i, j int) bool {
-		return finalList[i].CpuPercent > finalList[j].CpuPercent
+	sort.SliceStable(processList, func(i, j int) bool {
+		return processList[i].CpuPercent > processList[j].CpuPercent
 	})
 	processDetails := SnapprocessInfo{
-		ProcessList: finalList,
+		ProcessList: processList,
 	}
 
 	respondJSON(w, http.StatusOK, processDetails)
+	for k := range MAP_KEYS {
+		delete(MAP_KEYS, k)
+	}
 }
